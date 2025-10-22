@@ -571,6 +571,7 @@ class Hunyuan3DDiTPipeline:
     ) -> List[List[trimesh.Trimesh]]:
         callback = kwargs.pop("callback", None)
         callback_steps = kwargs.pop("callback_steps", None)
+        volume_decoding_callback = kwargs.pop("volume_decoding_callback", None)
 
         self.set_surface_extractor(mc_algo)
 
@@ -654,7 +655,8 @@ class Hunyuan3DDiTPipeline:
         num_chunks=20000,
         octree_resolution=256,
         mc_algo='mc',
-        enable_pbar=True
+        enable_pbar=True,
+        progress_callback=None,
     ):
         if not output_type == "latent":
             latents = 1. / self.vae.scale_factor * latents
@@ -667,6 +669,7 @@ class Hunyuan3DDiTPipeline:
                 octree_resolution=octree_resolution,
                 mc_algo=mc_algo,
                 enable_pbar=enable_pbar,
+                progress_callback=progress_callback,
             )
         else:
             outputs = latents
@@ -700,6 +703,7 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
     ) -> List[List[trimesh.Trimesh]]:
         callback = kwargs.pop("callback", None)
         callback_steps = kwargs.pop("callback_steps", None)
+        volume_decoding_callback = kwargs.pop("volume_decoding_callback", None)
 
         self.set_surface_extractor(mc_algo)
 
@@ -767,4 +771,5 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
             output_type,
             box_v, mc_level, num_chunks, octree_resolution, mc_algo,
             enable_pbar=enable_pbar,
+            progress_callback=volume_decoding_callback,
         )

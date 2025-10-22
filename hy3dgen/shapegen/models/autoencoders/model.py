@@ -169,8 +169,9 @@ class VectsetVAE(nn.Module):
         self.surface_extractor = surface_extractor
 
     def latents2mesh(self, latents: torch.FloatTensor, **kwargs):
+        progress_callback = kwargs.pop("progress_callback", None)
         with synchronize_timer('Volume decoding'):
-            grid_logits = self.volume_decoder(latents, self.geo_decoder, **kwargs)
+            grid_logits = self.volume_decoder(latents, self.geo_decoder, progress_callback=progress_callback, **kwargs)
         with synchronize_timer('Surface extraction'):
             outputs = self.surface_extractor(grid_logits, **kwargs)
         return outputs

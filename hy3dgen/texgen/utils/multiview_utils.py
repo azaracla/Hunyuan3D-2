@@ -53,7 +53,7 @@ class Multiview_Diffusion_Net():
         torch.manual_seed(seed)
         os.environ["PL_GLOBAL_SEED"] = str(seed)
 
-    def __call__(self, input_images, control_images, camera_info):
+    def __call__(self, input_images, control_images, camera_info, callback=None):
 
         self.seed_everything(0)
 
@@ -81,6 +81,10 @@ class Multiview_Diffusion_Net():
         kwargs['camera_info_ref'] = camera_info_ref
         kwargs["normal_imgs"] = normal_image
         kwargs["position_imgs"] = position_image
+
+        if callback:
+            kwargs['callback'] = callback
+            kwargs['callback_steps'] = 1
 
         mvd_image = self.pipeline(input_images, num_inference_steps=30, **kwargs).images
 

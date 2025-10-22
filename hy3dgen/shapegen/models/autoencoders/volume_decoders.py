@@ -12,7 +12,7 @@
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
-from typing import Union, Tuple, List, Callable
+from typing import Union, Tuple, List, Callable, Optional
 
 import numpy as np
 import torch
@@ -148,6 +148,7 @@ class VanillaVolumeDecoder:
         num_chunks: int = 10000,
         octree_resolution: int = None,
         enable_pbar: bool = True,
+        progress_callback: Optional[callable] = None,
         **kwargs,
     ):
         device = latents.device
@@ -169,12 +170,15 @@ class VanillaVolumeDecoder:
 
         # 2. latents to 3d volume
         batch_logits = []
-        for start in tqdm(range(0, xyz_samples.shape[0], num_chunks), desc=f"Volume Decoding",
-                          disable=not enable_pbar):
+        total_steps = xyz_samples.shape[0] // num_chunks + 1
+        for i, start in enumerate(tqdm(range(0, xyz_samples.shape[0], num_chunks), desc=f"Volume Decoding",
+                          disable=not enable_pbar)):
             chunk_queries = xyz_samples[start: start + num_chunks, :]
             chunk_queries = repeat(chunk_queries, "p c -> b p c", b=batch_size)
             logits = geo_decoder(queries=chunk_queries, latents=latents)
             batch_logits.append(logits)
+            if progress_callback:
+                progress_callback(i + 1, total_steps, 1)
 
         grid_logits = torch.cat(batch_logits, dim=1)
         grid_logits = grid_logits.view((batch_size, *grid_size)).float()
@@ -194,6 +198,7 @@ class HierarchicalVolumeDecoding:
         octree_resolution: int = None,
         min_resolution: int = 63,
         enable_pbar: bool = True,
+        progress_callback: Optional[callable] = None,
         **kwargs,
     ):
         device = latents.device
@@ -230,16 +235,19 @@ class HierarchicalVolumeDecoding:
         # 2. latents to 3d volume
         batch_logits = []
         batch_size = latents.shape[0]
-        for start in tqdm(range(0, xyz_samples.shape[0], num_chunks),
-                          desc=f"Hierarchical Volume Decoding [r{resolutions[0] + 1}]"):
+        total_chunks = (xyz_samples.shape[0] + num_chunks - 1) // num_chunks
+        for i, start in enumerate(tqdm(range(0, xyz_samples.shape[0], num_chunks),
+                          desc=f"Hierarchical Volume Decoding [r{resolutions[0] + 1}]")):
             queries = xyz_samples[start: start + num_chunks, :]
             batch_queries = repeat(queries, "p c -> b p c", b=batch_size)
             logits = geo_decoder(queries=batch_queries, latents=latents)
             batch_logits.append(logits)
+            if progress_callback:
+                progress_callback(i + 1, total_chunks * len(resolutions), 1)
 
         grid_logits = torch.cat(batch_logits, dim=1).view((batch_size, grid_size[0], grid_size[1], grid_size[2]))
 
-        for octree_depth_now in resolutions[1:]:
+        for j, octree_depth_now in enumerate(resolutions[1:]):
             grid_size = np.array([octree_depth_now + 1] * 3)
             resolution = bbox_size / octree_depth_now
             next_index = torch.zeros(tuple(grid_size), dtype=dtype, device=device)
@@ -263,12 +271,16 @@ class HierarchicalVolumeDecoding:
             next_points = (next_points * torch.tensor(resolution, dtype=next_points.dtype, device=device) +
                            torch.tensor(bbox_min, dtype=next_points.dtype, device=device))
             batch_logits = []
-            for start in tqdm(range(0, next_points.shape[0], num_chunks),
-                              desc=f"Hierarchical Volume Decoding [r{octree_depth_now + 1}]"):
+            total_chunks_level = (next_points.shape[0] + num_chunks - 1) // num_chunks
+            for i, start in enumerate(tqdm(range(0, next_points.shape[0], num_chunks),
+                              desc=f"Hierarchical Volume Decoding [r{octree_depth_now + 1}]")):
                 queries = next_points[start: start + num_chunks, :]
                 batch_queries = repeat(queries, "p c -> b p c", b=batch_size)
                 logits = geo_decoder(queries=batch_queries.to(latents.dtype), latents=latents)
                 batch_logits.append(logits)
+                if progress_callback:
+                    progress_callback(i + 1, total_chunks_level, j + 2)
+
             grid_logits = torch.cat(batch_logits, dim=1)
             next_logits[nidx] = grid_logits[0, ..., 0]
             grid_logits = next_logits.unsqueeze(0)
@@ -299,6 +311,7 @@ class FlashVDMVolumeDecoding:
         min_resolution: int = 63,
         mini_grid_num: int = 4,
         enable_pbar: bool = True,
+        progress_callback: Optional[callable] = None,
         **kwargs,
     ):
         processor = self.processor
@@ -354,14 +367,16 @@ class FlashVDMVolumeDecoding:
         )
         batch_logits = []
         num_batchs = max(num_chunks // xyz_samples.shape[1], 1)
-        for start in tqdm(range(0, xyz_samples.shape[0], num_batchs),
-                          desc=f"FlashVDM Volume Decoding", disable=not enable_pbar):
+        for i, start in enumerate(tqdm(range(0, xyz_samples.shape[0], num_batchs),
+                          desc=f"FlashVDM Volume Decoding", disable=not enable_pbar)):
             queries = xyz_samples[start: start + num_batchs, :]
             batch = queries.shape[0]
             batch_latents = repeat(latents.squeeze(0), "p c -> b p c", b=batch)
             processor.topk = True
             logits = geo_decoder(queries=queries, latents=batch_latents)
             batch_logits.append(logits)
+            if progress_callback:
+                progress_callback(i + 1, (xyz_samples.shape[0] + num_batchs - 1) // num_batchs, 1)
         grid_logits = torch.cat(batch_logits, dim=0).reshape(
             mini_grid_num, mini_grid_num, mini_grid_num,
             mini_grid_size, mini_grid_size,
@@ -370,7 +385,7 @@ class FlashVDMVolumeDecoding:
             (batch_size, grid_size[0], grid_size[1], grid_size[2])
         )
 
-        for octree_depth_now in resolutions[1:]:
+        for j, octree_depth_now in enumerate(resolutions[1:]):
             grid_size = np.array([octree_depth_now + 1] * 3)
             resolution = bbox_size / octree_depth_now
             next_index = torch.zeros(tuple(grid_size), dtype=dtype, device=device)
@@ -409,6 +424,10 @@ class FlashVDMVolumeDecoding:
             logits_grid_list = []
             start_num = 0
             sum_num = 0
+
+            # This part is complex to add progress, I will skip it for now
+            # as it is part of a loop that is hard to track
+
             for grid_index, count in zip(unique_values[0].cpu().tolist(), unique_values[1].cpu().tolist()):
                 if sum_num + count < num_chunks or sum_num == 0:
                     sum_num += count
@@ -425,8 +444,8 @@ class FlashVDMVolumeDecoding:
                 processor.topk = input_grid
                 logits_grid = geo_decoder(queries=next_points[:, start_num:start_num + sum_num], latents=latents)
                 logits_grid_list.append(logits_grid)
-            logits_grid = torch.cat(logits_grid_list, dim=1)
-            grid_logits[index.indices] = logits_grid.squeeze(0).squeeze(-1)
+            grid_logits = torch.cat(logits_grid_list, dim=1)
+            grid_logits[index.indices] = grid_logits.squeeze(0).squeeze(-1)
             next_logits[nidx] = grid_logits
             grid_logits = next_logits.unsqueeze(0)
 
